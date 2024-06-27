@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Commodity Data Entry</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #013220; /* Dark green background */
+            color: #fff;
+        }
+        label, input, select, textarea {
+            display: block;
+            margin-bottom: 10px;
+            width: 100%;
+            max-width: 400px;
+        }
+        label {
+            color: #fff; /* White text for labels */
+        }
+        input, select, textarea {
+            color: #000;
+        }
+        textarea {
+            height: 100px;
+        }
+        .hidden {
+            display: none;
+        }
+        #tableContainer {
+            margin-top: 20px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            font-size: 0.9em;
+            background: #fff;
+            color: #000;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 5px;
+            text-align: center;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+        .header-row th {
+            background-color: #e0e0e0;
+            font-weight: bold;
+        }
+        button {
+            display: block;
+            margin-top: 10px;
+            padding: 10px;
+            border: none;
+            color: white;
+            cursor: pointer;
+        }
+        #submitButton {
+            background-color: #4CAF50;
+        }
+        #addMeterButton, #exportButton, #copyTableButton {
+            background-color: #4CAF50; /* Green */
+        }
+        button:hover {
+            opacity: 0.8;
+        }
+        #meterInfo {
+            margin-top: 20px;
+            font-size: 1em;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+
+<h2>Consumption Breakdown Generator (CBG) V.2.1</h2>
+
+<form id="dataForm">
+    <label for="commodityType">Commodity type:</label>
+    <select id="commodityType" name="commodityType">
+        <option value="Gas">Gas</option>
+        <option value="Electricity">Electricity</option>
+        <option value="LPG">LPG</option>
+        <option value="LPG (Liters)">LPG (Liters)</option>
+    </select>
+
+    <label for="startDate">Start date (MM/YYYY):</label>
+    <input type="month" id="startDate" name="startDate" placeholder="MM/YYYY">
+
+    <label for="endDate">End date (MM/YYYY):</label>
+    <input type="month" id="endDate" name="endDate" placeholder="MM/YYYY">
+
+    <label for="meterNumber">Meter number:</label>
+    <input type="number" id="meterNumber" name="meterNumber" placeholder="Enter meter number">
+
+    <label for="userTable">Paste your table data here:</label>
+    <textarea id="userTable" name="userTable" placeholder="Paste your table data..."></textarea>
+
+    <button type="button" id="submitButton" onclick="processTable()">Submit</button>
+</form>
+
+<div id="tableContainer"></div>
+<div id="meterInfo" class="hidden"></div>
+
+<button id="addMeterButton" class="hidden" onclick="resetFormAndScroll()">Add another meter</button>
+
+<button id="exportButton" class="hidden" onclick="exportToExcel()">Export to Excel</button>
+
+<button id="copyTableButton" class="hidden" onclick="copyTables()">Copy Table(s)</button>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.16.2/xlsx.full.min.js"></script>
+<script>
+    let meterInfoArray = [];
+
+    function getCCLRate(commodityType, date) {
+        const year = date.getFullYear();
+        const month = date.getMonth() + 1; // Months are 0-based, so add 1
+
+        // Check if it's April 2024 or later
+        if (year >= 2024 && month >= 4) {
+            return 0.00775;
+        }
+
+        // Previous rates before April 2024
+        const startYear = month >= 4 ? year : year - 1; // Adjust year if before April
+
+        const rates = {
+            'Electricity': {
+                2016: 0.00559, 2017: 0.00568, 2018: 0.00583, 2019: 0.00847, 2020: 0.00811, 2021: 0.00775, 2022: 0.00775, 2023: 0.00775
+            },
+            'Gas': {
+                2016: 0.00195, 2017: 0.00198, 2018: 0.00203, 2019: 0.00339, 2020: 0.00406, 2021: 0.00465, 2022: 0.00568, 2023: 0.00672
+            },
+            'LPG': {
+                2016: 0.01251, 2017: 0.01272, 2018: 0.01304, 2019: 0.02175, 2020: 0.02175, 2021: 0.02175, 2022: 0.02175, 2023: 0.02175
+            },
+            'LPG (Liters)': {
+                2016: 0.00652, 2017: 0.00652, 2018: 0.00652, 2019: 0.010875, 2020: 0.010875, 2021: 0.010875, 2022: 0.010875, 2023: 0.010875
+            }
+        };
+
+        return rates[commodityType][startYear] || 0;
+    }
+
+    function processTable() {
+        const commodityType = document.getElementById('commodityType').value;
+        const meterNumber = document.getElementById('meterNumber').value;
+        const startDate = new Date(document.getElementById('startDate').value);
+        const endDate = new Date(document.getElementById('endDate').value);
+        const userTable = document.getElementById('userTable').value;
+
+        if (!startDate || !endDate || startDate > endDate || !userTable.trim()) {
+            alert('Please fill all fields correctly.');
+            return;
+        }
+
+        const rows = userTable.trim().split('\n').map(row => row.split('\t'));
+
+        let html = '<table>';
+        html += `<thead>
+                    <tr class="header-row">
+                        <th colspan="6">Commodity Type: ${commodityType}</th>
+                    </tr>
+                    <tr class="header-row">
+                        <th colspan="6">Meter Number: ${meterNumber}</th>
+                    </tr>
+                    <tr>
+                        <th>Date</th>
+                        <th>Consumption (Kwh)</th>
+                        <th>CCL Rate (£/kWh)</th>
+                        <th>CCL Claim (£)</th>
+                        <th>CCL Charge (£)</th>
+                        <th>Supplier</th>
+                    </tr>
+                </thead>`;
+        html += '<tbody>';
+
+        let currentDate = new Date(startDate);
+        let totalCclClaim = 0;
+
+        rows.forEach(row => {
+            // Remove commas from the numbers in the second and third columns
+            row[0] = row[0].replace(/,/g, '');
+            row[1] = row[1].replace(/,/g, '');
+
+            const options = { year: 'numeric', month: 'long' };
+            const cclRate = getCCLRate(commodityType, currentDate).toFixed(5);
+            const cclClaim = parseFloat(row[1].replace('£', '').trim()) || 0;
+            totalCclClaim += cclClaim;
+            html += `<tr>
+                        <td>${currentDate.toLocaleDateString('en-GB', options)}</td>
+                        <td>${row[0]}</td>
+                        <td>£${cclRate}</td>
+                        <td>£${cclClaim.toFixed(2)}</td>
+                        <td>${row[2]}</td>
+                        <td>${row[3]}</td>
+                    </tr>`;
+            currentDate.setMonth(currentDate.getMonth() + 1);
+        });
+
+        // Add total CCL Claim row
+        html += `<tr>
+                    <td colspan="3"></td>
+                    <td><strong>Total CCL Claim (£)</strong></td>
+                    <td colspan="2"><strong>£${totalCclClaim.toFixed(2)}</strong></td>
+                </tr>`;
+
+        html += '</tbody></table>';
+
+        document.getElementById('tableContainer').innerHTML += html;
+
+        // Add meter information to the array
+        meterInfoArray.push({ meterNumber, commodityType });
+
+        // Update meter information display
+        updateMeterInfoDisplay();
+
+        document.getElementById('dataForm').reset();
+        document.getElementById('addMeterButton').classList.remove('hidden');
+        document.getElementById('exportButton').classList.remove('hidden');
+        document.getElementById('copyTableButton').classList.remove('hidden');
+    }
+
+    function resetFormAndScroll() {
+        document.getElementById('dataForm').reset();
+        document.getElementById('userTable').value = '';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function exportToExcel() {
+        let wb = XLSX.utils.book_new();
+        let sheetsData = [];
+
+        // Get data from all tables
+        let tables = document.querySelectorAll('#tableContainer table');
+        tables.forEach((table, index) => {
+            let wsData = [];
+            let rows = table.querySelectorAll('tr');
+
+            rows.forEach(row => {
+                let rowData = [];
+                row.querySelectorAll('td, th').forEach(cell => {
+                    rowData.push(cell.textContent);
+                });
+                wsData.push(rowData);
+            });
+
+            let ws = XLSX.utils.aoa_to_sheet(wsData);
+            sheetsData.push({ name: `Meter ${index + 1}`, data: ws });
+        });
+
+        // Add sheets to workbook
+        sheetsData.forEach(sheet => {
+            XLSX.utils.book_append_sheet(wb, sheet.data, sheet.name);
+        });
+
+        // Generate and save the Excel file
+        var wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        var blob = new Blob([wbout], { type: 'application/octet-stream' });
+        var fileName = 'commodity_data.xlsx';
+
+        if (navigator.msSaveBlob) { // For IE
+            navigator.msSaveBlob(blob, fileName);
+        } else {
+            var link = document.createElement('a');
+            link.href = window.URL.createObjectURL(blob);
+            link.setAttribute('download', fileName);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        }
+    }
+
+    function copyTables() {
+        const tables = document.querySelectorAll('#tableContainer table');
+        const container = document.createElement('div');
+        tables.forEach(table => {
+            const clone = table.cloneNode(true);
+            container.appendChild(clone);
+        });
+        document.body.appendChild(container);
+        const range = document.createRange();
+        range.selectNode(container);
+        window.getSelection().removeAllRanges();
+        window.getSelection().addRange(range);
+        document.execCommand('copy');
+        document.body.removeChild(container);
+        alert('Tables copied to clipboard!');
+    }
+
+    function updateMeterInfoDisplay() {
+        const meterInfoDiv = document.getElementById('meterInfo');
+        meterInfoDiv.innerHTML = '<strong>Generated Meter Information:</strong><br>';
+
+        meterInfoArray.forEach(info => {
+            meterInfoDiv.innerHTML += `Meter Number: ${info.meterNumber}, Commodity Type: ${info.commodityType}<br>`;
+        });
+
+        meterInfoDiv.classList.remove('hidden');
+    }
+</script>
+
+</body>
+</html>
